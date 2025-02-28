@@ -1,4 +1,8 @@
-Deep-Voice dataset/
+The Fake-or-Real Dataset /
+audio_cnn.pth
+best_model.pth
+crnn_best.pth
+resnet50_best.pth
 research papers/
 Review 1.pptx
 .DS_Store
