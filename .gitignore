@@ -3,6 +3,8 @@ audio_cnn.pth
 best_model.pth
 crnn_best.pth
 resnet50_best.pth
+resnet101_best.pth
+vgg16_best.pth
 research papers/
 Review 1.pptx
 .DS_Store
