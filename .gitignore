@@ -1,10 +1,17 @@
 The Fake-or-Real Dataset /
+FoR reduced dataset/
 audio_cnn.pth
 best_model.pth
 crnn_best.pth
 resnet50_best.pth
 resnet101_best.pth
 vgg16_best.pth
+simple_cnn_reduced_hypertuned.pth
+simple_cnn_reduced.pth
+Wave2Vec_model.pth
+ResNet_101.pth
+crnn_best_reduced.pth
 research papers/
 Review 1.pptx
+Forensic Analysis using deep learning.docx
 .DS_Store
