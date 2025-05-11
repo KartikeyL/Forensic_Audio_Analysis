@@ -1,104 +1,93 @@
 import streamlit as st
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
 import librosa
+import numpy as np
+import io
 
-# --- CRNN MODEL DEFINITION -----------------------------------------------
-class CRNNModel(nn.Module):
-    def __init__(self, n_mels=128, hidden_size=128, num_classes=2):
-        super().__init__()
+# Constants
+SAMPLE_RATE = 16000
+N_MELS = 128
+FIXED_LENGTH = 256
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# CRNN Model Definition
+class CRNN(nn.Module):
+    def __init__(self, num_classes=2):
+        super(CRNN, self).__init__()
         self.conv = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),  
-            nn.BatchNorm2d(32),                          
+            nn.Conv2d(1, 32, kernel_size=(3, 3), stride=1, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2),                             
-
-            nn.Conv2d(32, 64, kernel_size=3, padding=1), 
-            nn.BatchNorm2d(64),                          
+            nn.MaxPool2d(kernel_size=(2, 2)),
+            nn.Conv2d(32, 64, kernel_size=(3, 3), stride=1, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(2),                             
-
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),                         
-            nn.ReLU()                                    
+            nn.MaxPool2d(kernel_size=(2, 2)),
+            nn.Dropout(0.3)
         )
-        feat_dim = (n_mels // 4) * 128  # 128 mel bins pooled twice -> 32 freq
-        self.lstm = nn.LSTM(
-            input_size=feat_dim,
-            hidden_size=hidden_size,
-            num_layers=2,
-            bidirectional=True,
-            batch_first=True
-        )
-        self.fc = nn.Linear(hidden_size * 2, num_classes)
+        self.lstm = nn.LSTM(input_size=64 * 64, hidden_size=128, num_layers=2,
+                            batch_first=True, bidirectional=True)
+        self.fc = nn.Linear(128 * 2, num_classes)
 
     def forward(self, x):
-        x = self.conv(x)  
-        b, c, f, t = x.size()
-        x = x.permute(0, 3, 1, 2).contiguous().view(b, t, c * f)
-        out, _ = self.lstm(x)
-        feat = out[:, -1, :]  
-        return self.fc(feat)
+        x = self.conv(x)
+        x = x.permute(0, 2, 3, 1)
+        x = x.reshape(x.shape[0], x.shape[1], -1)
+        x, _ = self.lstm(x)
+        x = self.fc(x[:, -1, :])
+        return x
 
-# --- LOAD MODEL (cached) --------------------------------------------------
-@st.cache_resource
-def load_model(path: str, device: str):
-    model = CRNNModel()
-    state = torch.load(path, map_location=device)
-    model.load_state_dict(state)
-    model.to(device).eval()
-    return model
+# Load CRNN Model
+model = CRNN().to(DEVICE)
+model.load_state_dict(torch.load("crnn_best.pth", map_location=DEVICE))
+model.eval()
 
-# --- FEATURE EXTRACTION ---------------------------------------------------
-def extract_melspec(audio_file, sr=22050, n_mels=128, hop_length=512):
-    y, _ = librosa.load(audio_file, sr=sr)
-    m = librosa.feature.melspectrogram(
-        y=y,
-        sr=sr,
-        n_mels=n_mels,
-        hop_length=hop_length
-    )
-    log_m = librosa.power_to_db(m, ref=np.max)
-    log_m = (log_m - log_m.mean()) / (log_m.std() + 1e-9)
-    return torch.tensor(log_m).unsqueeze(0).unsqueeze(0).float()
+# Preprocess Function
+def preprocess_audio(file):
+    y, sr = librosa.load(file, sr=SAMPLE_RATE)
+    mel_spec = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=N_MELS)
+    mel_spec = librosa.power_to_db(mel_spec, ref=np.max)
+    mel_spec = np.pad(mel_spec, ((0, 0), (0, max(0, FIXED_LENGTH - mel_spec.shape[1]))), mode="constant")[:, :FIXED_LENGTH]
+    mel_spec = torch.tensor(mel_spec, dtype=torch.float32).unsqueeze(0).unsqueeze(0).to(DEVICE)
+    return mel_spec
 
-# --- STREAMLIT USER INTERFACE ---------------------------------------------
-def main():
-    st.title("🔍 Audio Tampering Detector")
-    st.markdown("""
-    Upload two MP3 files:
-    1. **Original Audio** (reference)
-    2. **Test Audio** (to check)
-    The app will show the probability the test audio is untampered.
-    """)
+# Predict Function
+def predict(file):
+    input_tensor = preprocess_audio(io.BytesIO(file.read()))
+    with torch.no_grad():
+        outputs = model(input_tensor)
+        probs = torch.softmax(outputs, dim=1)
+        real_prob = probs[0][0].item() * 100  # Real
+        fake_prob = probs[0][1].item() * 100  # Fake
+        return real_prob, fake_prob
 
-    col1, col2 = st.columns(2)
-    orig_file = col1.file_uploader("Original (.mp3)", type=["mp3"])
-    test_file = col2.file_uploader("Test (.mp3)", type=["mp3"])
+# Streamlit App
+st.title("🎙️ DeepFake Audio Tampering Detection")
+st.markdown("Upload an **original (real)** audio and a **test** audio to check if the test audio is tampered (fake)")
 
-    if orig_file and test_file:
-        st.audio(orig_file, format="audio/mp3")
-        st.audio(test_file, format="audio/mp3")
+# Upload both audios
+original_file = st.file_uploader("Upload Original (Real) Audio", type=["wav", "mp3"], key="original")
+test_file = st.file_uploader("Upload Test Audio", type=["wav", "mp3"], key="test")
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = load_model(
-            r"D:\Major-project\FOR-Dataset\reduced\crnn_reduced_improved.pth",
-            device
-        )
+if original_file and test_file:
+    st.markdown("---")
+    
+    st.markdown("**Original Audio:**")
+    st.audio(original_file, format='audio/wav')
+    
+    st.markdown("**Test Audio:**")
+    st.audio(test_file, format='audio/wav')
 
-        # Only test audio is passed through the classifier
-        test_tensor = extract_melspec(test_file)
-        logits = model(test_tensor.to(device))
-        probs = F.softmax(logits, dim=1).cpu().detach().numpy()[0]
-        untampered_prob = probs[1]  # index 1 = untampered
+    # Predict only on test audio
+    real_prob, fake_prob = predict(test_file)
 
-        st.metric("Probability Untampered", f"{untampered_prob:.3f}")
-        if untampered_prob >= 0.5:
-            st.success("Likely Untampered")
-        else:
-            st.error("Possible Tampering")
+    st.markdown(f"**Untampered (Real) Probability: {real_prob:.2f}%**")
+    st.progress(int(real_prob))
 
-if __name__ == "__main__":
-    main()
+    st.markdown(f"**Tampered (Fake) Probability: {fake_prob:.2f}%**")
+    st.progress(int(fake_prob))
+    
+    # Final larger result message
+    if fake_prob > 50:
+        st.markdown('<p style="color:red; font-size:36px; font-weight:bold;">This test audio is likely tampered (fake)</p>', unsafe_allow_html=True)
+    else:
+        st.markdown('<p style="color:green; font-size:36px; font-weight:bold;">This test audio is likely untampered (real)</p>', unsafe_allow_html=True)

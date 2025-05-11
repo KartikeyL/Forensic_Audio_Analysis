@@ -4,6 +4,4 @@ app.py
 .ipynb_checkpoints/
 *.pth
 research papers/
-Review 1.pptx
-Forensic Analysis using deep learning.docx
 .DS_Store
