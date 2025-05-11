@@ -61,7 +61,7 @@ def predict(file):
         return real_prob, fake_prob
 
 # Streamlit App
-st.title("🎙️ DeepFake Audio Tampering Detection")
+st.title("🎙️ Forensic Audio Analysis")
 st.markdown("Upload an **original (real)** audio and a **test** audio to check if the test audio is tampered (fake)")
 
 # Upload both audios
